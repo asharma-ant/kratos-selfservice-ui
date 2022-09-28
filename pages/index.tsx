@@ -1,161 +1,144 @@
-import { Card, CardTitle, P, H2, H3, CodeBox } from "@ory/themes"
+import {
+  SelfServiceLoginFlow,
+  SubmitSelfServiceLoginFlowBody,
+} from "@ory/client"
+import { CardTitle } from "@ory/themes"
 import { AxiosError } from "axios"
 import type { NextPage } from "next"
 import Head from "next/head"
+import Link from "next/link"
 import { useRouter } from "next/router"
 import { useEffect, useState } from "react"
 
-import { DocsButton, MarginCard, createLogoutHandler } from "../pkg"
+import {
+  ActionCard,
+  CenterLink,
+  createLogoutHandler,
+  Flow,
+  MarginCard,
+} from "../pkg"
+import { handleGetFlowError, handleFlowError } from "../pkg/errors"
 import ory from "../pkg/sdk"
 
 const Home: NextPage = () => {
-  const [session, setSession] = useState<string>(
-    "No valid Ory Session was found.\nPlease sign in to receive one.",
-  )
-  const [hasSession, setHasSession] = useState<boolean>(false)
+  const [flow, setFlow] = useState<SelfServiceLoginFlow>()
+
   const router = useRouter()
-  const onLogout = createLogoutHandler()
+  const {
+    return_to: returnTo,
+    flow: flowId,
+    // Refresh means we want to refresh the session. This is needed, for example, when we want to update the password
+    // of a user.
+    refresh,
+    // AAL = Authorization Assurance Level. This implies that we want to upgrade the AAL, meaning that we want
+    // to perform two-factor authentication/verification.
+    aal,
+  } = router.query
+
+  // This might be confusing, but we want to show the user an option
+  // to sign out if they are performing two-factor authentication!
+  const onLogout = createLogoutHandler([aal, refresh])
 
   useEffect(() => {
-    ory
-      .toSession()
-      .then(({ data }) => {
-        setSession(JSON.stringify(data, null, 2))
-        setHasSession(true)
-      })
-      .catch((err: AxiosError) => {
-        switch (err.response?.status) {
-          case 403:
-          // This is a legacy error code thrown. See code 422 for
-          // more details.
-          case 422:
-            // This status code is returned when we are trying to
-            // validate a session which has not yet completed
-            // it's second factor
-            return router.push("/login?aal=aal2")
-          case 401:
-            // do nothing, the user is not logged in
-            return
-        }
+    // If the router is not ready yet, or we already have a flow, do nothing.
+    if (!router.isReady || flow) {
+      return
+    }
 
-        // Something else happened!
-        return Promise.reject(err)
+    // If ?flow=.. was in the URL, we fetch it
+    if (flowId) {
+      ory
+        .getSelfServiceLoginFlow(String(flowId))
+        .then(({ data }) => {
+          setFlow(data)
+        })
+        .catch(handleGetFlowError(router, "login", setFlow))
+      return
+    }
+
+    // Otherwise we initialize it
+    ory
+      .initializeSelfServiceLoginFlowForBrowsers(
+        Boolean(refresh),
+        aal ? String(aal) : undefined,
+        returnTo ? String(returnTo) : undefined,
+      )
+      .then(({ data }) => {
+        setFlow(data)
       })
-  }, [])
+      .catch(handleFlowError(router, "login", setFlow))
+  }, [flowId, router, router.isReady, aal, refresh, returnTo, flow])
+
+  const onSubmit = (values: SubmitSelfServiceLoginFlowBody) =>
+    router
+      // On submission, add the flow ID to the URL but do not navigate. This prevents the user loosing
+      // his data when she/he reloads the page.
+      .push(`/login?flow=${flow?.id}`, undefined, { shallow: true })
+      .then(() =>
+        ory
+          .submitSelfServiceLoginFlow(String(flow?.id), values, undefined)
+          // We logged in successfully! Let's bring the user home.
+          .then((res) => {
+            if (flow?.return_to) {
+              window.location.href = flow?.return_to
+              return
+            }
+            router.push("/")
+          })
+          .then(() => {})
+          .catch(handleFlowError(router, "login", setFlow))
+          .catch((err: AxiosError) => {
+            // If the previous handler did not catch the error it's most likely a form validation error
+            if (err.response?.status === 400) {
+              // Yup, it is!
+              setFlow(err.response?.data)
+              return
+            }
+
+            return Promise.reject(err)
+          }),
+      )
 
   return (
-    <div className={"container-fluid"}>
+    <>
       <Head>
-        <title>Ory NextJS Integration Example</title>
-        <meta name="description" content="NextJS + React + Vercel + Ory" />
+        <title>ESDash - Sign In</title>
+        <meta name="description" content="Sign in to ES Dashboard" />
       </Head>
-
-      <MarginCard wide>
-        <CardTitle>Welcome to Ory!</CardTitle>
-        <P>
-          Welcome to the Ory Managed UI. This UI implements a run-of-the-mill
-          user interface for all self-service flows (login, registration,
-          recovery, verification, settings). The purpose of this UI is to help
-          you get started quickly. In the long run, you probably want to
-          implement your own custom user interface.
-        </P>
-        <div className="row">
-          <div className="col-md-4 col-xs-12">
-            <div className="box">
-              <H3>Documentation</H3>
-              <P>
-                Here are some useful documentation pieces that help you get
-                started.
-              </P>
-              <div className="row">
-                <DocsButton
-                  title="Get Started"
-                  href="https://www.ory.sh/docs/get-started"
-                  testid="get-started"
-                />
-                <DocsButton
-                  title="User Flows"
-                  href="https://www.ory.sh/docs/concepts/self-service"
-                  testid="user-flows"
-                />
-                <DocsButton
-                  title="Identities"
-                  href="https://www.ory.sh/docs/concepts/identity"
-                  testid="identities"
-                />
-                <DocsButton
-                  title="Sessions"
-                  href="https://www.ory.sh/docs/concepts/session"
-                  testid="sessions"
-                />
-                <DocsButton
-                  title="Bring Your Own UI"
-                  href="https://www.ory.sh/docs/guides/bring-your-user-interface"
-                  testid="customize-ui"
-                />
-              </div>
-            </div>
-          </div>
-          <div className="col-md-8 col-xs-12">
-            <div className="box">
-              <H3>Session Information</H3>
-              <P>
-                Below you will find the decoded Ory Session if you are logged
-                in.
-              </P>
-              <CodeBox data-testid="session-content" code={session} />
-            </div>
-          </div>
-        </div>
+      <MarginCard>
+        <CardTitle>
+          {(() => {
+            if (flow?.refresh) {
+              return "Confirm Action"
+            } else if (flow?.requested_aal === "aal2") {
+              return "Two-Factor Authentication"
+            }
+            return "Sign In"
+          })()}
+        </CardTitle>
+        <Flow onSubmit={onSubmit} flow={flow} />
       </MarginCard>
-
-      <Card wide>
-        <H2>Other User Interface Screens</H2>
-        <div className={"row"}>
-          <DocsButton
-            unresponsive
-            testid="login"
-            href="/login"
-            disabled={hasSession}
-            title={"Login"}
-          />
-          <DocsButton
-            unresponsive
-            testid="sign-up"
-            href="/registration"
-            disabled={hasSession}
-            title={"Sign Up"}
-          />
-          <DocsButton
-            unresponsive
-            testid="recover-account"
-            href="/recovery"
-            disabled={hasSession}
-            title="Recover Account"
-          />
-          <DocsButton
-            unresponsive
-            testid="verify-account"
-            href="/verification"
-            title="Verify Account"
-          />
-          <DocsButton
-            unresponsive
-            testid="account-settings"
-            href="/settings"
-            disabled={!hasSession}
-            title={"Account Settings"}
-          />
-          <DocsButton
-            unresponsive
-            testid="logout"
-            onClick={onLogout}
-            disabled={!hasSession}
-            title={"Logout"}
-          />
-        </div>
-      </Card>
-    </div>
+      {aal || refresh ? (
+        <ActionCard>
+          <CenterLink data-testid="logout-link" onClick={onLogout}>
+            Log out
+          </CenterLink>
+        </ActionCard>
+      ) : (
+        <>
+          <ActionCard>
+            <Link href="/registration" passHref>
+              <CenterLink>Create account</CenterLink>
+            </Link>
+          </ActionCard>
+          <ActionCard>
+            <Link href="/recovery" passHref>
+              <CenterLink>Recover your account</CenterLink>
+            </Link>
+          </ActionCard>
+        </>
+      )}
+    </>
   )
 }
 

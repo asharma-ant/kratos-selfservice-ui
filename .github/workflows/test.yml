@@ -24,7 +24,7 @@ jobs:
           npm run start &
           npm run test
         env:
-          ORY_KRATOS_URL: https://playground.projects.oryapis.com/
+          ORY_KRATOS_URL: http://127.0.0.1:4455/
 
   test-self:
     runs-on: ubuntu-latest
